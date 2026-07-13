@@ -44,13 +44,30 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+extern TIM_HandleTypeDef htim5;
 /* USER CODE END Variables */
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
 /* USER CODE END FunctionPrototypes */
+
+/* Hook prototypes */
+void configureTimerForRunTimeStats(void);
+unsigned long getRunTimeCounterValue(void);
+
+/* USER CODE BEGIN 1 */
+/* Functions needed when configGENERATE_RUN_TIME_STATS is on */
+__weak void configureTimerForRunTimeStats(void)
+{
+	HAL_TIM_Base_Start(&htim5);
+}
+
+__weak unsigned long getRunTimeCounterValue(void)
+{
+	return  __HAL_TIM_GET_COUNTER(&htim5);
+}
+/* USER CODE END 1 */
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */

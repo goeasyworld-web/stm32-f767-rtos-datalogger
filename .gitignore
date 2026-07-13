@@ -1,0 +1,17 @@
+@"
+# Build output
+Debug/
+Release/
+build/
+
+# IDE-local noise
+.settings/
+.metadata/
+*.launch
+
+# Temp / OS junk
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+"@ | Out-File -Encoding ascii .gitignore
