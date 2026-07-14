@@ -24,6 +24,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "ringbuffer.h"
+#include <stdbool.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -90,6 +92,12 @@ const osThreadAttr_t blinkTask3_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+osThreadId_t ringbufferTaskHandle;
+const osThreadAttr_t ringbuffertask_attributes = {
+		.name = "ringbuffertask",
+		.stack_size = 512*4,
+		.priority = (osPriority_t) osPriorityNormal,
+};
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -105,6 +113,7 @@ static void MX_TIM5_Init(void);
 void StartDefaultTask(void *argument);
 void StartTask02(void *argument);
 void StartTask03(void *argument);
+void StartUartRxTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -113,6 +122,10 @@ void StartTask03(void *argument);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 char statsbuf[512];
+ringbuf_t uart_ringbuffer;
+uint8_t byte_received;
+uint8_t length = 1;
+volatile uint32_t rx_dropped =0;
 /* USER CODE END 0 */
 
 /**
@@ -183,6 +196,8 @@ int main(void)
 
   /* creation of blinkTask3 */
   blinkTask3Handle = osThreadNew(StartTask03, NULL, &blinkTask3_attributes);
+
+  ringbufferTaskHandle = osThreadNew(StartUartRxTask, NULL, &ringbuffertask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -493,7 +508,18 @@ int _write(int file, char *ptr, int len)
   return len;
 }
 /* USER CODE END 4 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if(huart->Instance == USART3)
+	{
+		if(!rb_store(&uart_ringbuffer, byte_received))
+		{
+			rx_dropped++;
+		}
+		HAL_UART_Receive_IT(&huart3, &byte_received, length);
+	}
 
+}
 /* USER CODE BEGIN Header_StartDefaultTask */
 /**
   * @brief  Function implementing the defaultTask thread.
@@ -501,21 +527,75 @@ int _write(int file, char *ptr, int len)
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
+void StartUartRxTask(void *argument)
+{
+
+	uint8_t byte;
+	char line[64];
+	uint8_t index = 0;
+	rb_init(&uart_ringbuffer);
+	HAL_UART_Receive_IT(&huart3, &byte_received, length);
+
+	for(;;)
+	{
+		if(rb_receive(&uart_ringbuffer, &byte))
+		{
+
+			if(byte == '\r' || byte == '\n')
+			{
+				line[index] = '\0';
+				if(strcmp(line, "LED ON") == 0)
+				{
+					HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+				}
+				else if(strcmp(line, "LED OFF") == 0)
+				{
+					HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+				}
+				else if(strcmp(line, "status") == 0)
+				{
+		            printf("\r\nuptime : %lu s\r\n", osKernelGetTickCount() / 1000);
+		            printf("dropped: %lu bytes\r\n", rx_dropped);
+		            vTaskGetRunTimeStats(statsbuf);
+		            printf("%s\r\n", statsbuf);
+				}
+				else if(strcmp(line, "clear") == 0)
+				{
+					rx_dropped = 0;
+				}
+				else if(index>0)
+				{
+					printf("\nUnknown command\r\n", line);
+				}
+
+				index = 0;
+			}
+			else
+			{
+				if(index < sizeof(line) -1)
+				{
+					line[index] = (char)byte;
+					index++;
+				}
+
+			}
+			HAL_UART_Transmit(&huart3, &byte, length, 10);
+		}
+		else
+		{
+			osDelay(1000);
+		}
+	}
+}
 void StartDefaultTask(void *argument)
 {
-  /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  uint32_t count = 0;
-  for(;;)
-  {
-	 printf("Alive: %lu s\r\n", count++);
-	 if(count %5 == 0)
-	 {
-		 vTaskGetRunTimeStats(statsbuf);
-		 printf("Task        Time    %%\r\n%s\r\n", statsbuf);
-	 }
-    osDelay(1000);
-  }
+
+
+	for(;;)
+	{
+		//printf("Alive: %ld \r\n",count++);
+		osDelay(1000);
+	}
   /* USER CODE END 5 */
 }
 
@@ -532,7 +612,7 @@ void StartTask02(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
+	//HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7);
     osDelay(150);
   }
   /* USER CODE END StartTask02 */
@@ -551,7 +631,7 @@ void StartTask03(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	 HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
+	 //HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0);
     osDelay(150);
   }
   /* USER CODE END StartTask03 */

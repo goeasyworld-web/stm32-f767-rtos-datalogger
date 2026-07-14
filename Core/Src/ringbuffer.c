@@ -15,7 +15,7 @@ bool rb_is_empty(ringbuf_t *rb)
 	return rb->head == rb->tail;
 }
 
-bool rb_put(ringbuf_t *rb, uint8_t byte)
+bool rb_store(ringbuf_t *rb, uint8_t byte)
 {
 	if(rb_is_full(rb))
 	{
@@ -29,7 +29,7 @@ bool rb_put(ringbuf_t *rb, uint8_t byte)
 	}
 }
 
-bool rb_get(ringbuf_t *rb, uint8_t *byte)
+bool rb_receive(ringbuf_t *rb, uint8_t *byte)
 {
 	if(rb_is_empty(rb))
 	{
