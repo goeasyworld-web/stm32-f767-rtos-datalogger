@@ -63,7 +63,12 @@ ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecr
 
 ETH_TxPacketConfig TxConfig;
 
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
+
 ETH_HandleTypeDef heth;
+
+I2C_HandleTypeDef hi2c1;
 
 TIM_HandleTypeDef htim5;
 
@@ -92,31 +97,48 @@ const osThreadAttr_t blinkTask3_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+
+/* USER CODE BEGIN PV */
 osThreadId_t ringbufferTaskHandle;
 const osThreadAttr_t ringbuffertask_attributes = {
 		.name = "ringbuffertask",
 		.stack_size = 512*4,
 		.priority = (osPriority_t) osPriorityNormal,
 };
-/* USER CODE BEGIN PV */
+osThreadId_t bmeSensorReadTaskHandle;
+const osThreadAttr_t bmeSensorReadTaskHandle_attributes = {
+		.name = "bmeSensorRead",
+		.stack_size = 512*4,
+		.priority = (osPriority_t) osPriorityNormal,
+};
 
+osThreadId_t adcSmaplingTaskHandle;
+const osThreadAttr_t adcSmaplingTaskHandle_attributes = {
+		.name = "adcSampling",
+		.stack_size = 512*4,
+		.priority = (osPriority_t) osPriorityNormal,
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MPU_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ETH_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_TIM5_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_I2C1_Init(void);
 void StartDefaultTask(void *argument);
 void StartTask02(void *argument);
 void StartTask03(void *argument);
-void StartUartRxTask(void *argument);
-
 /* USER CODE BEGIN PFP */
-
+extern void bmeSensorRead(void *arguments);
+extern bool bme280init();
+void adcSampling(void *arguments);
+void StartUartRxTask(void *argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -126,6 +148,8 @@ ringbuf_t uart_ringbuffer;
 uint8_t byte_received;
 uint8_t length = 1;
 volatile uint32_t rx_dropped =0;
+uint16_t adc_buff[512];
+volatile uint8_t adc_half_ready = 0;
 /* USER CODE END 0 */
 
 /**
@@ -160,12 +184,18 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ETH_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_TIM5_Init();
+  MX_ADC1_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-
+  if(HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buff, 512) != HAL_OK)
+  {
+	  Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -196,8 +226,9 @@ int main(void)
 
   /* creation of blinkTask3 */
   blinkTask3Handle = osThreadNew(StartTask03, NULL, &blinkTask3_attributes);
-
   ringbufferTaskHandle = osThreadNew(StartUartRxTask, NULL, &ringbuffertask_attributes);
+  //adcSmaplingTaskHandle = osThreadNew(adcSampling, NULL, &adcSmaplingTaskHandle_attributes);
+  bmeSensorReadTaskHandle = osThreadNew(bmeSensorRead, NULL, &bmeSensorReadTaskHandle_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -281,6 +312,58 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
   * @brief ETH Initialization Function
   * @param None
   * @retval None
@@ -326,6 +409,54 @@ static void MX_ETH_Init(void)
   /* USER CODE BEGIN ETH_Init 2 */
 
   /* USER CODE END ETH_Init 2 */
+
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.Timing = 0x20303E5D;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
 
 }
 
@@ -445,6 +576,22 @@ static void MX_USB_OTG_FS_PCD_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -507,7 +654,6 @@ int _write(int file, char *ptr, int len)
   HAL_UART_Transmit(&huart3, (uint8_t *)ptr, len, HAL_MAX_DELAY);
   return len;
 }
-/* USER CODE END 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	if(huart->Instance == USART3)
@@ -520,13 +666,67 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	}
 
 }
-/* USER CODE BEGIN Header_StartDefaultTask */
-/**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartDefaultTask */
+void bmeSensorRead(void *arguments)
+{
+	bme280init();
+	for(;;)
+	{
+		bme280init();
+		osDelay(1000);
+	}
+}
+
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
+{
+	if(hadc->Instance == ADC1)
+	{
+		adc_half_ready = 1;
+	}
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+	if(hadc->Instance == ADC1)
+	{
+		adc_half_ready = 2;
+	}
+}
+
+/***************************************ADC SAMPLING PINGPONG BUFFER****************************************************/
+void adcSampling(void *arguments)
+{
+	uint32_t adcSum = 0;
+
+	for(;;)
+	{
+		if(adc_half_ready == 1)
+		{
+			adc_half_ready = 0;
+			adcSum = 0;
+			for(uint16_t i = 0; i<256; i++)
+			{
+				adcSum = adc_buff[i] + adcSum;
+			}
+			printf(" [count %ld] h1  %ld \r\n", osKernelGetTickCount(), (adcSum/256));
+		}
+		else if(adc_half_ready == 2)
+		{
+			adc_half_ready = 0;
+			adcSum = 0;
+			for(uint16_t i = 256; i<512; i++)
+			{
+				adcSum = adc_buff[i] + adcSum;
+			}
+			printf(" [count %ld] h2 %ld \r\n", osKernelGetTickCount(), (adcSum/256));
+		}
+		else{
+			osDelay(1);
+		}
+	}
+}
+/***************************************ADC SAMPLING****************************************************/
+
+/*******************************************UART RX CIRCULAR BUFFER****************************************************/
 void StartUartRxTask(void *argument)
 {
 
@@ -565,7 +765,7 @@ void StartUartRxTask(void *argument)
 				}
 				else if(index>0)
 				{
-					printf("\nUnknown command\r\n", line);
+					printf("Unknown command\r\n", line);
 				}
 
 				index = 0;
@@ -587,14 +787,37 @@ void StartUartRxTask(void *argument)
 		}
 	}
 }
+/*******************************************UART RX CIRCULAR BUFFER****************************************************/
+/* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-
-
+  /* USER CODE BEGIN 5 */
+	uint8_t id = 0;
+  /* Infinite loop */
+	//if(HAL_I2C_Mem_Read(&hi2c1, 0x76<<1, 0xD0, I2C_MEMADD_SIZE_8BIT, &id, 1, 100) == HAL_OK)
+	{
+		//printf(" ID: 0x%2X\r\n", id);
+	}
+	//printf("I2C Scan start \r\n");
+	for(uint8_t addr=1; addr<128; addr++)
+	{
+		if(HAL_I2C_IsDeviceReady(&hi2c1, addr<<1, 1, 10) == HAL_OK)
+		{
+			//printf("Found 0x%02X\r\n", addr);
+		}
+	}
+	//printf("I2C Scan done\r\n");
 	for(;;)
 	{
-		//printf("Alive: %ld \r\n",count++);
-		osDelay(1000);
+	osDelay(100);
 	}
   /* USER CODE END 5 */
 }

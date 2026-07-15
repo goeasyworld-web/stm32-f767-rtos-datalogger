@@ -107,7 +107,7 @@ int _isatty(int file)
 {
   (void)file;
   return 1;
-}
+ }
 
 int _lseek(int file, int ptr, int dir)
 {
