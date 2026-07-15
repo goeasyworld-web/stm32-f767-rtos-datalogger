@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include "ringbuffer.h"
 #include <stdbool.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -137,8 +138,10 @@ void StartTask03(void *argument);
 /* USER CODE BEGIN PFP */
 extern void bmeSensorRead(void *arguments);
 extern bool bme280init();
+extern bool bme28ReadRaw(int32_t *raw_t);
 void adcSampling(void *arguments);
 void StartUartRxTask(void *argument);
+extern int32_t bme280_compensate_T(int32_t adc_T);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -150,6 +153,8 @@ uint8_t length = 1;
 volatile uint32_t rx_dropped =0;
 uint16_t adc_buff[512];
 volatile uint8_t adc_half_ready = 0;
+
+
 /* USER CODE END 0 */
 
 /**
@@ -666,13 +671,30 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	}
 
 }
+
+
+
 void bmeSensorRead(void *arguments)
 {
-	bme280init();
+	int32_t raw_t;
+
+    if (!bme280init())
+    {
+        printf("BME280 init FAILED\r\n");
+        for(;;) osDelay(1000);          /* park forever — no sensor, nothing to do */
+    }
 	for(;;)
 	{
-		bme280init();
-		osDelay(1000);
+		if(bme28ReadRaw(&raw_t))
+		{
+	        int32_t T = bme280_compensate_T(raw_t);          /* raw -> hundredths of °C */
+	        printf("T = %ld.%02ld C  (raw %ld)\r\n", T / 100, T % 100, raw_t);
+		}
+        else
+        {
+            printf("BME280 read FAILED\r\n");
+        }
+		osDelay(2000);
 	}
 }
 

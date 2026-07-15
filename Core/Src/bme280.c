@@ -4,12 +4,24 @@
 
 extern I2C_HandleTypeDef hi2c1;
 
-static bme280_calib_t cal;
+bme280_calib_t cal;
+static int32_t t_fine;
+int32_t bme280_compensate_T(int32_t adc_T)
+{
+    int32_t var1, var2, T;
+    var1 = ((((adc_T >> 3) - ((int32_t)cal.dig_T1 << 1))) * ((int32_t)cal.dig_T2)) >> 11;
+    var2 = (((((adc_T >> 4) - ((int32_t)cal.dig_T1)) * ((adc_T >> 4) - ((int32_t)cal.dig_T1))) >> 12) *
+            ((int32_t)cal.dig_T3)) >> 14;
+    t_fine = var1 + var2;
+    T = (t_fine * 5 + 128) >> 8;
+    return T;   /* in 0.01 °C — 2643 means 26.43 °C */
+}
 
 bool bme280init()
 {
 	uint8_t calib1[26];
 	uint8_t calib2[7];
+	uint8_t v;
 
 	if(HAL_I2C_Mem_Read(&hi2c1, 0X76<<1, 0X88, I2C_MEMADD_SIZE_8BIT, calib1, 26, 100) == HAL_OK)
 	{
@@ -45,8 +57,25 @@ bool bme280init()
 		printf("calib read FAILED\r\n");
 		return false;
 	}
-    printf("BME280 init OK: T1=%u T2=%d P5=%d H1=%u\r\n",
-           cal.dig_T1, cal.dig_T2, cal.dig_P5, cal.dig_H1);
+	v = 0x01;
+	if(HAL_I2C_Mem_Write(&hi2c1, 0X76<<1, 0XF2, I2C_MEMADD_SIZE_8BIT, &v, 1, 100)!=HAL_OK)
+	{
+		return false;
+	}
+	v = 0x27;
+	if(HAL_I2C_Mem_Write(&hi2c1, 0X76<<1, 0XF4, I2C_MEMADD_SIZE_8BIT, &v, 1, 100)!=HAL_OK)
+	{
+		return false;
+	}
 	return true;
 
 }
+
+bool bme28ReadRaw(int32_t *raw_t)
+{
+	uint8_t raw[8];
+	HAL_I2C_Mem_Read(&hi2c1, 0X76<<1, 0XF7, I2C_MEMADD_SIZE_8BIT, raw, 8, 100);
+	*raw_t = ((int32_t)raw[3] <<12) | ((int32_t)raw[4] << 4) | (raw[5] >>4);
+}
+
+
