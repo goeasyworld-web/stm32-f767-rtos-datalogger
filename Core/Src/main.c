@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include "ringbuffer.h"
 #include <stdbool.h>
-
+#include "sensor_msg.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -98,7 +98,11 @@ const osThreadAttr_t blinkTask3_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-
+/* Definitions for sensor */
+osMessageQueueId_t sensorHandle;
+const osMessageQueueAttr_t sensor_attributes = {
+  .name = "sensor"
+};
 /* USER CODE BEGIN PV */
 osThreadId_t ringbufferTaskHandle;
 const osThreadAttr_t ringbuffertask_attributes = {
@@ -119,6 +123,13 @@ const osThreadAttr_t adcSmaplingTaskHandle_attributes = {
 		.stack_size = 512*4,
 		.priority = (osPriority_t) osPriorityNormal,
 };
+
+osThreadId_t sensoraggregatoreTaskHandle;
+const osThreadAttr_t sensoraggregatoreTaskHandle_attributes = {
+		.name = "sesnorAggregater",
+		.stack_size = 512*4,
+		.priority = (osPriority_t) osPriorityNormal,
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -135,6 +146,7 @@ static void MX_I2C1_Init(void);
 void StartDefaultTask(void *argument);
 void StartTask02(void *argument);
 void StartTask03(void *argument);
+void sensorAggregator(void *argument);
 /* USER CODE BEGIN PFP */
 extern void bmeSensorRead(void *arguments);
 extern bool bme280init();
@@ -151,9 +163,14 @@ ringbuf_t uart_ringbuffer;
 uint8_t byte_received;
 uint8_t length = 1;
 volatile uint32_t rx_dropped =0;
+volatile uint32_t queue_rx_dropped =0;
 uint16_t adc_buff[512];
 volatile uint8_t adc_half_ready = 0;
-
+typedef struct{
+	uint8_t source;
+	int32_t value;
+	uint32_t timestamp;
+}sensor_msg_t;
 
 /* USER CODE END 0 */
 
@@ -218,6 +235,11 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of sensor */
+  sensorHandle = osMessageQueueNew (16, 12, &sensor_attributes);
+  printf("sizeof(SensorMsgQueue = %u\r\n", (unsigned)sizeof(sensor_msg_t));
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -231,12 +253,13 @@ int main(void)
 
   /* creation of blinkTask3 */
   blinkTask3Handle = osThreadNew(StartTask03, NULL, &blinkTask3_attributes);
-  ringbufferTaskHandle = osThreadNew(StartUartRxTask, NULL, &ringbuffertask_attributes);
-  //adcSmaplingTaskHandle = osThreadNew(adcSampling, NULL, &adcSmaplingTaskHandle_attributes);
-  bmeSensorReadTaskHandle = osThreadNew(bmeSensorRead, NULL, &bmeSensorReadTaskHandle_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  ringbufferTaskHandle = osThreadNew(StartUartRxTask, NULL, &ringbuffertask_attributes);
+  adcSmaplingTaskHandle = osThreadNew(adcSampling, NULL, &adcSmaplingTaskHandle_attributes);
+  bmeSensorReadTaskHandle = osThreadNew(bmeSensorRead, NULL, &bmeSensorReadTaskHandle_attributes);
+  sensoraggregatoreTaskHandle = osThreadNew(sensorAggregator, NULL, &sensoraggregatoreTaskHandle_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -672,12 +695,34 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 }
 
+void sensorAggregator(void *arguments)
+{
+	sensor_msg_t msg;
+	osStatus_t xStatus;
+	printf("size of = %u \r\n", (unsigned)(sizeof(sensor_msg_t)));
 
+	for(;;)
+	{
+		xStatus = osMessageQueueGet(sensorHandle, &msg, NULL, osWaitForever);
+		if(xStatus == osOK)
+		{
+			switch(msg.source)
+			{
+				case 1: printf("[%lu] ADC avg: %ld\r\n", msg.timestamp, msg.value);
+						break;
+				case 2: printf("[%lu] BME temp-----: %ld.%02ld C\r\n", msg.timestamp, msg.value / 100, msg.value % 100); break;
+
+				default: printf("[%lu] ?? src=%u val=%ld\r\n",   msg.timestamp, msg.source, msg.value);
+			}
+		}
+	}
+}
 
 void bmeSensorRead(void *arguments)
 {
 	int32_t raw_t;
-
+	sensor_msg_t bme_msg;
+	osStatus_t xStatus;
     if (!bme280init())
     {
         printf("BME280 init FAILED\r\n");
@@ -688,7 +733,15 @@ void bmeSensorRead(void *arguments)
 		if(bme28ReadRaw(&raw_t))
 		{
 	        int32_t T = bme280_compensate_T(raw_t);          /* raw -> hundredths of °C */
-	        printf("T = %ld.%02ld C  (raw %ld)\r\n", T / 100, T % 100, raw_t);
+	        //printf("T = %ld.%02ld C  (raw %ld)\r\n", T / 100, T % 100, raw_t);
+	        bme_msg.source = SRC_BME;
+	        bme_msg.timestamp = osKernelGetTickCount();
+	        bme_msg.value = T;
+	        xStatus = osMessageQueuePut(sensorHandle, &bme_msg, 0, 0);
+	        if(xStatus!=osOK)
+	        {
+	        	printf("Failed to push into the queue \r\n");
+	        }
 		}
         else
         {
@@ -718,7 +771,8 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 void adcSampling(void *arguments)
 {
 	uint32_t adcSum = 0;
-
+	sensor_msg_t adc_msg;
+	osStatus_t xStatus;
 	for(;;)
 	{
 		if(adc_half_ready == 1)
@@ -729,7 +783,15 @@ void adcSampling(void *arguments)
 			{
 				adcSum = adc_buff[i] + adcSum;
 			}
-			printf(" [count %ld] h1  %ld \r\n", osKernelGetTickCount(), (adcSum/256));
+			//printf(" [count %ld] h1  %ld \r\n", osKernelGetTickCount(), (adcSum/256));
+			adc_msg.source = SRC_ADC;
+			adc_msg.timestamp = osKernelGetTickCount();
+			adc_msg.value = (adcSum/256);
+			xStatus = osMessageQueuePut(sensorHandle, &adc_msg, 0, 0);
+			if(xStatus !=osOK)
+			{
+				queue_rx_dropped++;
+			}
 		}
 		else if(adc_half_ready == 2)
 		{
@@ -739,7 +801,15 @@ void adcSampling(void *arguments)
 			{
 				adcSum = adc_buff[i] + adcSum;
 			}
-			printf(" [count %ld] h2 %ld \r\n", osKernelGetTickCount(), (adcSum/256));
+			//printf(" [count %ld] h2 %ld \r\n", osKernelGetTickCount(), (adcSum/256));
+			adc_msg.source = SRC_ADC;
+			adc_msg.timestamp = osKernelGetTickCount();
+			adc_msg.value = (adcSum/256);
+			xStatus = osMessageQueuePut(sensorHandle, &adc_msg, 0, 0);
+			if(xStatus !=osOK)
+			{
+				queue_rx_dropped++;
+			}
 		}
 		else{
 			osDelay(1);
@@ -831,7 +901,7 @@ void StartDefaultTask(void *argument)
 	//printf("I2C Scan start \r\n");
 	for(uint8_t addr=1; addr<128; addr++)
 	{
-		if(HAL_I2C_IsDeviceReady(&hi2c1, addr<<1, 1, 10) == HAL_OK)
+		//if(HAL_I2C_IsDeviceReady(&hi2c1, addr<<1, 1, 10) == HAL_OK)
 		{
 			//printf("Found 0x%02X\r\n", addr);
 		}
