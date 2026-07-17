@@ -1,7 +1,9 @@
+#include "main.h"
+#include "cmsis_os2.h"
 #include <stdio.h>
 #include <mempool.h>
 #include <stdbool.h>
-#include "main.h"
+
 
 
 static uint8_t pool_blocks[POOL_BLOCKS][POOL_BLOCK_SIZE];
@@ -9,7 +11,7 @@ static uint8_t pool_blocks[POOL_BLOCKS][POOL_BLOCK_SIZE];
 static osMessageQueueId_t pool_freq;
 
 
-void mempool_init()
+bool mempool_init()
 {
 	pool_freq = osMessageQueueNew(POOL_BLOCKS, sizeof(void*), NULL);
 	if(pool_freq == NULL)
@@ -19,7 +21,8 @@ void mempool_init()
 
 	for(uint32_t i = 0; i<POOL_BLOCKS; i++)
 	{
-		void *key = &poll_blocks[i];
+		void *key = &pool_blocks[i];
+
 		if(osMessageQueuePut(pool_freq, &key, 0, 0) != osOK)
 		{
 			return false;
@@ -40,6 +43,10 @@ void *mempool_alloc()
 
 bool mempool_free(void *block)
 {
+	if(block == NULL)
+	{
+		return false;
+	}
 	if(osMessageQueuePut(pool_freq, &block, 0,0) !=osOK)
 	{
 		return false;

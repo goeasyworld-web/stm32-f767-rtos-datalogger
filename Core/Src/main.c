@@ -27,6 +27,7 @@
 #include "ringbuffer.h"
 #include <stdbool.h>
 #include "sensor_msg.h"
+#include "mempool.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -146,8 +147,9 @@ static void MX_I2C1_Init(void);
 void StartDefaultTask(void *argument);
 void StartTask02(void *argument);
 void StartTask03(void *argument);
-void sensorAggregator(void *argument);
+
 /* USER CODE BEGIN PFP */
+void sensorAggregator(void *arguments);
 extern void bmeSensorRead(void *arguments);
 extern bool bme280init();
 extern bool bme28ReadRaw(int32_t *raw_t);
@@ -158,6 +160,7 @@ extern int32_t bme280_compensate_T(int32_t adc_T);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#define BATCH_SAMPLES 240
 char statsbuf[512];
 ringbuf_t uart_ringbuffer;
 uint8_t byte_received;
@@ -166,11 +169,7 @@ volatile uint32_t rx_dropped =0;
 volatile uint32_t queue_rx_dropped =0;
 uint16_t adc_buff[512];
 volatile uint8_t adc_half_ready = 0;
-typedef struct{
-	uint8_t source;
-	int32_t value;
-	uint32_t timestamp;
-}sensor_msg_t;
+
 
 /* USER CODE END 0 */
 
@@ -218,6 +217,10 @@ int main(void)
   {
 	  Error_Handler();
   }
+  if(!mempool_init())
+  {
+	  Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -237,8 +240,7 @@ int main(void)
 
   /* Create the queue(s) */
   /* creation of sensor */
-  sensorHandle = osMessageQueueNew (16, 12, &sensor_attributes);
-  printf("sizeof(SensorMsgQueue = %u\r\n", (unsigned)sizeof(sensor_msg_t));
+  sensorHandle = osMessageQueueNew (16, 16, &sensor_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -699,7 +701,7 @@ void sensorAggregator(void *arguments)
 {
 	sensor_msg_t msg;
 	osStatus_t xStatus;
-	printf("size of = %u \r\n", (unsigned)(sizeof(sensor_msg_t)));
+	//printf("size of = %u \r\n", (unsigned)(sizeof(sensor_msg_t)));
 
 	for(;;)
 	{
@@ -708,7 +710,13 @@ void sensorAggregator(void *arguments)
 		{
 			switch(msg.source)
 			{
-				case 1: printf("[%lu] ADC avg: %ld\r\n", msg.timestamp, msg.value);
+				case SRC_ADC:
+					if(msg.payload!=NULL)
+					{
+						adc_batch_t *b  = (adc_batch_t*)msg.payload;
+					    printf("[%lu] ADC avg:%u min:%u max:%u\r\n",msg.timestamp, b->avg, b->min, b->max);
+					    mempool_free(msg.payload);
+					}
 						break;
 				case 2: printf("[%lu] BME temp-----: %ld.%02ld C\r\n", msg.timestamp, msg.value / 100, msg.value % 100); break;
 
@@ -723,6 +731,8 @@ void bmeSensorRead(void *arguments)
 	int32_t raw_t;
 	sensor_msg_t bme_msg;
 	osStatus_t xStatus;
+
+
     if (!bme280init())
     {
         printf("BME280 init FAILED\r\n");
@@ -770,49 +780,67 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 /***************************************ADC SAMPLING PINGPONG BUFFER****************************************************/
 void adcSampling(void *arguments)
 {
+	static uint16_t pool_alloc_fail;
+	uint16_t min = 0;
+	uint16_t max = 0;
 	uint32_t adcSum = 0;
 	sensor_msg_t adc_msg;
 	osStatus_t xStatus;
+	uint16_t start;
 	for(;;)
 	{
 		if(adc_half_ready == 1)
 		{
 			adc_half_ready = 0;
-			adcSum = 0;
-			for(uint16_t i = 0; i<256; i++)
-			{
-				adcSum = adc_buff[i] + adcSum;
-			}
-			//printf(" [count %ld] h1  %ld \r\n", osKernelGetTickCount(), (adcSum/256));
-			adc_msg.source = SRC_ADC;
-			adc_msg.timestamp = osKernelGetTickCount();
-			adc_msg.value = (adcSum/256);
-			xStatus = osMessageQueuePut(sensorHandle, &adc_msg, 0, 0);
-			if(xStatus !=osOK)
-			{
-				queue_rx_dropped++;
-			}
+			start = 0;
+
 		}
 		else if(adc_half_ready == 2)
 		{
+
 			adc_half_ready = 0;
-			adcSum = 0;
-			for(uint16_t i = 256; i<512; i++)
-			{
-				adcSum = adc_buff[i] + adcSum;
-			}
-			//printf(" [count %ld] h2 %ld \r\n", osKernelGetTickCount(), (adcSum/256));
-			adc_msg.source = SRC_ADC;
-			adc_msg.timestamp = osKernelGetTickCount();
-			adc_msg.value = (adcSum/256);
-			xStatus = osMessageQueuePut(sensorHandle, &adc_msg, 0, 0);
-			if(xStatus !=osOK)
-			{
-				queue_rx_dropped++;
-			}
+			start = 256;
 		}
 		else{
 			osDelay(1);
+		}
+
+		adc_batch_t *batch = (adc_batch_t*)mempool_alloc();
+		if(batch == NULL)
+		{
+			//printf("Allocation failed %lu\r\n",pool_alloc_fail++);
+			continue;
+		}
+		adcSum = 0;
+		min = adc_buff[start];
+		max = adc_buff[start];
+		for(uint8_t i = 0; i<BATCH_SAMPLES; i++)
+		{
+			adcSum = adc_buff[start+i] + adcSum;
+			batch->samples[i] = adc_buff[start + i];
+			if(adc_buff[start+i] < min)
+			{
+				min = adc_buff[i];
+			}
+			if(adc_buff[start + i] > max)
+			{
+				max = adc_buff[i];
+			}
+		}
+		batch->max = max;
+		batch->min = min;
+		batch->count = BATCH_SAMPLES;
+		//printf(" [count %ld] h1  %ld \r\n", osKernelGetTickCount(), (adcSum/256));
+		adc_msg.source = SRC_ADC;
+		adc_msg.timestamp = osKernelGetTickCount();
+		adc_msg.value = (uint16_t)(adcSum/BATCH_SAMPLES);
+		batch->avg = adc_msg.value;
+		adc_msg.payload = batch;
+		xStatus = osMessageQueuePut(sensorHandle, &adc_msg, 0, 0);
+		if(xStatus !=osOK)
+		{
+			queue_rx_dropped++;
+			mempool_free(batch);
 		}
 	}
 }
