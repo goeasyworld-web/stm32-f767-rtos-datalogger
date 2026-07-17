@@ -53,3 +53,9 @@ bool mempool_free(void *block)
 	}
 	return true;
 }
+
+uint32_t mempool_free_count(void)
+{
+    return osMessageQueueGetCount(pool_freq);   /* keys on the rack = free rooms */
+
+}

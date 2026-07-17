@@ -169,7 +169,7 @@ volatile uint32_t rx_dropped =0;
 volatile uint32_t queue_rx_dropped =0;
 uint16_t adc_buff[512];
 volatile uint8_t adc_half_ready = 0;
-
+volatile uint32_t pool_alloc_fail = 0;
 
 /* USER CODE END 0 */
 
@@ -780,7 +780,8 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 /***************************************ADC SAMPLING PINGPONG BUFFER****************************************************/
 void adcSampling(void *arguments)
 {
-	static uint16_t pool_alloc_fail;
+	static uint32_t batch_seq;
+
 	uint16_t min = 0;
 	uint16_t max = 0;
 	uint32_t adcSum = 0;
@@ -803,6 +804,7 @@ void adcSampling(void *arguments)
 		}
 		else{
 			osDelay(1);
+			continue;
 		}
 
 		adc_batch_t *batch = (adc_batch_t*)mempool_alloc();
@@ -833,6 +835,7 @@ void adcSampling(void *arguments)
 		//printf(" [count %ld] h1  %ld \r\n", osKernelGetTickCount(), (adcSum/256));
 		adc_msg.source = SRC_ADC;
 		adc_msg.timestamp = osKernelGetTickCount();
+		//adc_msg.value = ++batch_seq;
 		adc_msg.value = (uint16_t)(adcSum/BATCH_SAMPLES);
 		batch->avg = adc_msg.value;
 		adc_msg.payload = batch;
@@ -874,14 +877,21 @@ void StartUartRxTask(void *argument)
 				}
 				else if(strcmp(line, "status") == 0)
 				{
-		            printf("\r\nuptime : %lu s\r\n", osKernelGetTickCount() / 1000);
-		            printf("dropped: %lu bytes\r\n", rx_dropped);
-		            vTaskGetRunTimeStats(statsbuf);
-		            printf("%s\r\n", statsbuf);
-				}
-				else if(strcmp(line, "clear") == 0)
-				{
-					rx_dropped = 0;
+                    uint32_t freeblocks = mempool_free_count();
+
+                    printf("\r\n--- STATUS ---\r\n");
+                    printf("uptime         : %lu s\r\n", osKernelGetTickCount() / 1000);
+                    printf("pool free      : %lu / %u\r\n", freeblocks, POOL_BLOCKS);
+
+                    if (freeblocks == 0)
+                        printf("WARNING: pool exhausted (leak or consumer stall?)\r\n");
+
+                    printf("pool alloc fail: %lu\r\n", pool_alloc_fail);
+                    printf("queue drops    : %lu\r\n", queue_rx_dropped);
+                    printf("uart rx drops  : %lu\r\n", rx_dropped);
+
+                    vTaskGetRunTimeStats(statsbuf);
+                    printf("%s\r\n", statsbuf);
 				}
 				else if(index>0)
 				{

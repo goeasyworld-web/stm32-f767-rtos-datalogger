@@ -13,3 +13,5 @@ void *mempool_alloc(void);
 
 bool mempool_free(void *block);
 
+uint32_t mempool_free_count(void);
+
