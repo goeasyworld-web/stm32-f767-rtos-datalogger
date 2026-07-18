@@ -104,6 +104,17 @@ osMessageQueueId_t sensorHandle;
 const osMessageQueueAttr_t sensor_attributes = {
   .name = "sensor"
 };
+/* Definitions for halfReadyQueue */
+osMessageQueueId_t halfReadyQueueHandle;
+const osMessageQueueAttr_t halfReadyQueue_attributes = {
+  .name = "halfReadyQueue"
+};
+/* Definitions for myRecursiveMutex01 */
+osMutexId_t myRecursiveMutex01Handle;
+const osMutexAttr_t myRecursiveMutex01_attributes = {
+  .name = "myRecursiveMutex01",
+  .attr_bits = osMutexRecursive,
+};
 /* USER CODE BEGIN PV */
 osThreadId_t ringbufferTaskHandle;
 const osThreadAttr_t ringbuffertask_attributes = {
@@ -170,6 +181,7 @@ volatile uint32_t queue_rx_dropped =0;
 uint16_t adc_buff[512];
 volatile uint8_t adc_half_ready = 0;
 volatile uint32_t pool_alloc_fail = 0;
+volatile uint32_t half_ready_drop = 0;
 
 /* USER CODE END 0 */
 
@@ -226,6 +238,10 @@ int main(void)
   /* Init scheduler */
   osKernelInitialize();
 
+  /* Create the recursive mutex(es) */
+  /* creation of myRecursiveMutex01 */
+  myRecursiveMutex01Handle = osMutexNew(&myRecursiveMutex01_attributes);
+
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
@@ -241,6 +257,9 @@ int main(void)
   /* Create the queue(s) */
   /* creation of sensor */
   sensorHandle = osMessageQueueNew (16, 16, &sensor_attributes);
+
+  /* creation of halfReadyQueue */
+  halfReadyQueueHandle = osMessageQueueNew (4, sizeof(uint16_t), &halfReadyQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -681,7 +700,14 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 int _write(int file, char *ptr, int len)
 {
+	osMutexAcquire(myRecursiveMutex01Handle, osWaitForever);
+	if (myRecursiveMutex01Handle == NULL)
+	{
+	    Error_Handler();
+	}
   HAL_UART_Transmit(&huart3, (uint8_t *)ptr, len, HAL_MAX_DELAY);
+  osMutexRelease(myRecursiveMutex01Handle);
+
   return len;
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
@@ -765,7 +791,11 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	if(hadc->Instance == ADC1)
 	{
-		adc_half_ready = 1;
+		uint8_t which = 1;
+		if(osMessageQueuePut(halfReadyQueueHandle, &which, 0, 0) != osOK)
+		{
+			half_ready_drop++;
+		}
 	}
 }
 
@@ -773,7 +803,11 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	if(hadc->Instance == ADC1)
 	{
-		adc_half_ready = 2;
+		uint8_t which = 2;
+		if(osMessageQueuePut(halfReadyQueueHandle, &which, 0, 0) != osOK)
+		{
+			half_ready_drop++;
+		}
 	}
 }
 
@@ -784,28 +818,17 @@ void adcSampling(void *arguments)
 
 	uint16_t min = 0;
 	uint16_t max = 0;
+	uint8_t which;
 	uint32_t adcSum = 0;
 	sensor_msg_t adc_msg;
 	osStatus_t xStatus;
 	uint16_t start;
+	uint16_t i = 0;
 	for(;;)
 	{
-		if(adc_half_ready == 1)
-		{
-			adc_half_ready = 0;
-			start = 0;
+		osMessageQueueGet(halfReadyQueueHandle, &which, 0, osWaitForever);
 
-		}
-		else if(adc_half_ready == 2)
-		{
-
-			adc_half_ready = 0;
-			start = 256;
-		}
-		else{
-			osDelay(1);
-			continue;
-		}
+		start = (which ==1)? 0:256;
 
 		adc_batch_t *batch = (adc_batch_t*)mempool_alloc();
 		if(batch == NULL)
@@ -816,7 +839,7 @@ void adcSampling(void *arguments)
 		adcSum = 0;
 		min = adc_buff[start];
 		max = adc_buff[start];
-		for(uint8_t i = 0; i<BATCH_SAMPLES; i++)
+		for(i = 0; i<BATCH_SAMPLES; i++)
 		{
 			adcSum = adc_buff[start+i] + adcSum;
 			batch->samples[i] = adc_buff[start + i];
@@ -878,7 +901,11 @@ void StartUartRxTask(void *argument)
 				else if(strcmp(line, "status") == 0)
 				{
                     uint32_t freeblocks = mempool_free_count();
-
+                    osMutexAcquire(myRecursiveMutex01Handle, osWaitForever);
+                	//if (myRecursiveMutex01Handle == NULL)
+                	{
+                	    //Error_Handler();
+                	}
                     printf("\r\n--- STATUS ---\r\n");
                     printf("uptime         : %lu s\r\n", osKernelGetTickCount() / 1000);
                     printf("pool free      : %lu / %u\r\n", freeblocks, POOL_BLOCKS);
@@ -888,10 +915,12 @@ void StartUartRxTask(void *argument)
 
                     printf("pool alloc fail: %lu\r\n", pool_alloc_fail);
                     printf("queue drops    : %lu\r\n", queue_rx_dropped);
+                    printf("half drops    : %lu\r\n", half_ready_drop);
                     printf("uart rx drops  : %lu\r\n", rx_dropped);
 
                     vTaskGetRunTimeStats(statsbuf);
                     printf("%s\r\n", statsbuf);
+                    osMutexRelease(myRecursiveMutex01Handle);
 				}
 				else if(index>0)
 				{
@@ -909,7 +938,6 @@ void StartUartRxTask(void *argument)
 				}
 
 			}
-			HAL_UART_Transmit(&huart3, &byte, length, 10);
 		}
 		else
 		{
