@@ -29,6 +29,7 @@
 #include "sensor_msg.h"
 #include "mempool.h"
 #include <string.h>
+#include "mqtt_client_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -887,18 +888,25 @@ void StartUartRxTask(void *argument)
 void StartDefaultTask(void *argument)
 {
   /* init code for LWIP */
-  MX_LWIP_Init();
   /* USER CODE BEGIN 5 */
+	 MX_LWIP_Init();
+	 bool mqtt_started = false;
 
 	for(;;)
 	{
 		MX_LWIP_Process();
+
 		sys_check_timeouts();
-		printf("netif up: %d, dhcp state accessible: yes\r\n", netif_is_up(&gnetif));
+		//printf("netif up: %d, dhcp state accessible: yes\r\n", netif_is_up(&gnetif));
 		ethernet_link_check_state(&gnetif);
 		if(netif_is_link_up(&gnetif))
 		{
 			printf("link : UP, IP: %s\r\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
+			if(!mqtt_started && !ip4_addr_isany(netif_ip4_addr(&gnetif)))
+			{
+				mqtt_app_init();
+				mqtt_started = true;
+			}
 		}
 		else
 		{
