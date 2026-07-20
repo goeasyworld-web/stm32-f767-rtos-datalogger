@@ -18,8 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "string.h"
 #include "cmsis_os.h"
+#include "lwip.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -28,6 +28,7 @@
 #include <stdbool.h>
 #include "sensor_msg.h"
 #include "mempool.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,29 +47,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-#if defined ( __ICCARM__ ) /*!< IAR Compiler */
-#pragma location=0x2007c000
-ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-#pragma location=0x2007c0a0
-ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
-
-#elif defined ( __CC_ARM )  /* MDK ARM Compiler */
-
-__attribute__((at(0x2007c000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-__attribute__((at(0x2007c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
-
-#elif defined ( __GNUC__ ) /* GNU Compiler */
-
-ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
-#endif
-
-ETH_TxPacketConfig TxConfig;
-
 ADC_HandleTypeDef hadc1;
 DMA_HandleTypeDef hdma_adc1;
-
-ETH_HandleTypeDef heth;
 
 I2C_HandleTypeDef hi2c1;
 
@@ -149,7 +129,6 @@ void SystemClock_Config(void);
 static void MPU_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_ETH_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_TIM5_Init(void);
@@ -182,7 +161,7 @@ uint16_t adc_buff[512];
 volatile uint8_t adc_half_ready = 0;
 volatile uint32_t pool_alloc_fail = 0;
 volatile uint32_t half_ready_drop = 0;
-
+extern struct netif gnetif;
 /* USER CODE END 0 */
 
 /**
@@ -218,7 +197,6 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ETH_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_TIM5_Init();
@@ -278,7 +256,7 @@ int main(void)
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   ringbufferTaskHandle = osThreadNew(StartUartRxTask, NULL, &ringbuffertask_attributes);
-  adcSmaplingTaskHandle = osThreadNew(adcSampling, NULL, &adcSmaplingTaskHandle_attributes);
+  //adcSmaplingTaskHandle = osThreadNew(adcSampling, NULL, &adcSmaplingTaskHandle_attributes);
   bmeSensorReadTaskHandle = osThreadNew(bmeSensorRead, NULL, &bmeSensorReadTaskHandle_attributes);
   sensoraggregatoreTaskHandle = osThreadNew(sensorAggregator, NULL, &sensoraggregatoreTaskHandle_attributes);
   /* USER CODE END RTOS_THREADS */
@@ -409,55 +387,6 @@ static void MX_ADC1_Init(void)
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
-
-}
-
-/**
-  * @brief ETH Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ETH_Init(void)
-{
-
-  /* USER CODE BEGIN ETH_Init 0 */
-
-  /* USER CODE END ETH_Init 0 */
-
-   static uint8_t MACAddr[6];
-
-  /* USER CODE BEGIN ETH_Init 1 */
-
-  /* USER CODE END ETH_Init 1 */
-  heth.Instance = ETH;
-  MACAddr[0] = 0x00;
-  MACAddr[1] = 0x80;
-  MACAddr[2] = 0xE1;
-  MACAddr[3] = 0x00;
-  MACAddr[4] = 0x00;
-  MACAddr[5] = 0x00;
-  heth.Init.MACAddr = &MACAddr[0];
-  heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
-  heth.Init.TxDesc = DMATxDscrTab;
-  heth.Init.RxDesc = DMARxDscrTab;
-  heth.Init.RxBuffLen = 1524;
-
-  /* USER CODE BEGIN MACADDRESS */
-
-  /* USER CODE END MACADDRESS */
-
-  if (HAL_ETH_Init(&heth) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
-  TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
-  TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
-  TxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
-  /* USER CODE BEGIN ETH_Init 2 */
-
-  /* USER CODE END ETH_Init 2 */
 
 }
 
@@ -957,25 +886,24 @@ void StartUartRxTask(void *argument)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
+  /* init code for LWIP */
+  MX_LWIP_Init();
   /* USER CODE BEGIN 5 */
-	uint8_t id = 0;
-  /* Infinite loop */
-	//if(HAL_I2C_Mem_Read(&hi2c1, 0x76<<1, 0xD0, I2C_MEMADD_SIZE_8BIT, &id, 1, 100) == HAL_OK)
-	{
-		//printf(" ID: 0x%2X\r\n", id);
-	}
-	//printf("I2C Scan start \r\n");
-	for(uint8_t addr=1; addr<128; addr++)
-	{
-		//if(HAL_I2C_IsDeviceReady(&hi2c1, addr<<1, 1, 10) == HAL_OK)
-		{
-			//printf("Found 0x%02X\r\n", addr);
-		}
-	}
-	//printf("I2C Scan done\r\n");
+
 	for(;;)
 	{
-	osDelay(100);
+		sys_check_timeouts();
+		printf("netif up: %d, dhcp state accessible: yes\r\n", netif_is_up(&gnetif));
+		ethernet_link_check_state(&gnetif);
+		if(netif_is_link_up(&gnetif))
+		{
+			printf("link : UP, IP: %s\r\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
+		}
+		else
+		{
+			printf("link:Down \r\n");
+		}
+	osDelay(2000);
 	}
   /* USER CODE END 5 */
 }
