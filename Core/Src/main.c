@@ -892,6 +892,7 @@ void StartDefaultTask(void *argument)
 
 	for(;;)
 	{
+		MX_LWIP_Process();
 		sys_check_timeouts();
 		printf("netif up: %d, dhcp state accessible: yes\r\n", netif_is_up(&gnetif));
 		ethernet_link_check_state(&gnetif);
@@ -903,7 +904,7 @@ void StartDefaultTask(void *argument)
 		{
 			printf("link:Down \r\n");
 		}
-	osDelay(2000);
+	osDelay(10);
 	}
   /* USER CODE END 5 */
 }
