@@ -4,17 +4,61 @@
 #include <stdio.h>
 #include <string.h>
 #include "lwip/dns.h"
+#include "lwip/altcp_tls.h"
+#include "err.h"
 
 
 
 static mqtt_client_t *client;
 static volatile bool mqtt_connected = false;
 
+
+static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status)
+{
+	if(status == MQTT_CONNECT_ACCEPTED)
+	{
+		printf("MQTT Connected \r\n");
+		mqtt_connected = true;
+	}
+	else
+	{
+		printf("MQTT Connect failed, status = %d\r\n", status);
+		mqtt_connected = false;
+	}
+}
+static void mqtt_connect_tls(const ip_addr_t *broker_ip)
+{
+	struct mqtt_connect_client_info_t client_info;
+
+	client_info.client_id = "stm32_board";
+	client_info.client_user = "goeasy17";
+	client_info.client_pass = "Iotlearning@123";
+	client_info.keep_alive = 60;
+	client_info.will_topic = NULL;
+	/* NOTE: CubeMX/manual edits — verify ALL THREE remain 1 after any regeneration:
+	   LWIP_DNS, LWIP_ALTCP, LWIP_ALTCP_TLS, LWIP_ALTCP_TLS_MBEDTLS
+	   (altcp_tls_mbedtls.c compiles to an EMPTY file if LWIP_ALTCP_TLS_MBEDTLS is missing,
+	    even though the .c/.h files are physically present and included in the build —
+	    this produced 'undefined reference' linker errors that looked like a missing-file
+	    problem but was actually a missing-macro problem) */
+	client_info.tls_config = altcp_tls_create_config_client(NULL, 0);
+
+    if (client_info.tls_config == NULL)
+    {
+        printf("TLS config creation FAILED (returned NULL)\r\n");
+        return;
+    }
+
+	err_t err = mqtt_client_connect(client, broker_ip, 8883, mqtt_connection_cb, NULL, &client_info);
+	printf("mqtt_client_connect returned err=%d\r\n", err);
+}
+
 static void dns_found_cb(const char *name, const ip_addr_t *ipaddr, void *callback)
 {
 	if(ipaddr!=NULL)
 	{
 		printf("DNS Resolved: %s\r\n", ip4addr_ntoa(ipaddr));
+		mqtt_connect_tls(ipaddr);
 	}
 	else
 	{
@@ -75,21 +119,9 @@ void mqtt_app_publish_temp(int32_t temp)
 
 }
 
-static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status)
-{
-	if(status == MQTT_CONNECT_ACCEPTED)
-	{
-		printf("MQTT Connected \r\n");
-		mqtt_connected = true;
-	}
-	else
-	{
-		printf("MQTT Connect failed, status = %d\r\n", status);
-		mqtt_connected = false;
-	}
-}
 
-void mqtt_app_init(void)
+
+/*void mqtt_app_init(void)
 {
 	struct mqtt_connect_client_info_t client_info;
 	ip_addr_t broker_ip;
@@ -101,8 +133,9 @@ void mqtt_app_init(void)
 	client_info.will_topic = NULL;
 
 	IP4_ADDR(&broker_ip, 192, 168, 0, 164);
-	mqtt_client_connect(client, &broker_ip, 1883, mqtt_connection_cb, NULL, &client_info);
-}
+	mqtt_client_connect(client, &broker_ip, 8883, mqtt_connection_cb, NULL, &client_info);
+
+}*/
 
 bool mqtt_app_is_connected(void)
 {

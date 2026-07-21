@@ -2,7 +2,11 @@
  * @file
  * Application layered TCP/TLS connection API (to be used from TCPIP thread)
  *
- * This file contains options for an mbedtls port of the TLS layer.
+ * This file contains memory management function prototypes for a TLS layer using mbedTLS.
+ *
+ * Memory management contains:
+ * - allocating/freeing altcp_mbedtls_state_t
+ * - allocating/freeing memory used in the mbedTLS library
  */
 
 /*
@@ -36,32 +40,33 @@
  * Author: Simon Goldschmidt <goldsimon@gmx.de>
  *
  */
-#ifndef LWIP_HDR_ALTCP_TLS_OPTS_H
-#define LWIP_HDR_ALTCP_TLS_OPTS_H
+#ifndef LWIP_HDR_ALTCP_MBEDTLS_MEM_H
+#define LWIP_HDR_ALTCP_MBEDTLS_MEM_H
 
 #include "lwip/opt.h"
 
 #if LWIP_ALTCP /* don't build if not configured for use in lwipopts.h */
 
-/** LWIP_ALTCP_TLS_MBEDTLS==1: use mbedTLS for TLS support for altcp API
- * mbedtls include directory must be reachable via include search path
- */
-#ifndef LWIP_ALTCP_TLS_MBEDTLS
-#define LWIP_ALTCP_TLS_MBEDTLS                        1
+#include "lwip/apps/altcp_tls_mbedtls_opts.h"
+
+#if LWIP_ALTCP_TLS && LWIP_ALTCP_TLS_MBEDTLS
+
+#include "altcp_tls_mbedtls_structs.h"
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-/** Configure debug level of this file */
-#ifndef ALTCP_MBEDTLS_DEBUG
-#define ALTCP_MBEDTLS_DEBUG                           LWIP_DBG_OFF
+void altcp_mbedtls_mem_init(void);
+altcp_mbedtls_state_t *altcp_mbedtls_alloc(void *conf);
+void altcp_mbedtls_free(void *conf, altcp_mbedtls_state_t *state);
+void *altcp_mbedtls_alloc_config(size_t size);
+void altcp_mbedtls_free_config(void *item);
+
+#ifdef __cplusplus
+}
 #endif
 
-/** Set a session timeout in seconds for the basic session cache
- * ATTENTION: Using a session cache can lower security by reusing keys!
- */
-#ifndef ALTCP_MBEDTLS_SESSION_CACHE_TIMEOUT_SECONDS
-#define ALTCP_MBEDTLS_SESSION_CACHE_TIMEOUT_SECONDS   0
-#endif
-
+#endif /* LWIP_ALTCP_TLS && LWIP_ALTCP_TLS_MBEDTLS */
 #endif /* LWIP_ALTCP */
-
-#endif /* LWIP_HDR_ALTCP_TLS_OPTS_H */
+#endif /* LWIP_HDR_ALTCP_MBEDTLS_MEM_H */
