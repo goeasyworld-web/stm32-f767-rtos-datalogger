@@ -19,7 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
-#include "lwip.h"
+#include "mbedtls.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -30,6 +30,7 @@
 #include "mempool.h"
 #include <string.h>
 #include "mqtt_client_app.h"
+#include "lwip.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -147,6 +148,8 @@ extern bool bme28ReadRaw(int32_t *raw_t);
 void adcSampling(void *arguments);
 void StartUartRxTask(void *argument);
 extern int32_t bme280_compensate_T(int32_t adc_T);
+extern void mqtt_app_publish_temp(int32_t);
+extern void mqtt_app_start_hivemq(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -203,6 +206,8 @@ int main(void)
   MX_TIM5_Init();
   MX_ADC1_Init();
   MX_I2C1_Init();
+  /* Call PreOsInit function */
+  MX_MBEDTLS_Init();
   /* USER CODE BEGIN 2 */
   if(HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buff, 512) != HAL_OK)
   {
@@ -674,7 +679,9 @@ void sensorAggregator(void *arguments)
 					    mempool_free(msg.payload);
 					}
 						break;
-				case 2: printf("[%lu] BME temp-----: %ld.%02ld C\r\n", msg.timestamp, msg.value / 100, msg.value % 100); break;
+				case 2: printf("[%lu] BME temp-----: %ld.%02ld C\r\n", msg.timestamp, msg.value / 100, msg.value % 100);
+						mqtt_app_publish_temp(msg.value);
+						break;
 
 				default: printf("[%lu] ?? src=%u val=%ld\r\n",   msg.timestamp, msg.source, msg.value);
 			}
@@ -887,9 +894,9 @@ void StartUartRxTask(void *argument)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-  /* init code for LWIP */
   /* USER CODE BEGIN 5 */
 	 MX_LWIP_Init();
+
 	 bool mqtt_started = false;
 
 	for(;;)
@@ -904,7 +911,7 @@ void StartDefaultTask(void *argument)
 			printf("link : UP, IP: %s\r\n", ip4addr_ntoa(netif_ip4_addr(&gnetif)));
 			if(!mqtt_started && !ip4_addr_isany(netif_ip4_addr(&gnetif)))
 			{
-				mqtt_app_init();
+				mqtt_app_start_hivemq();
 				mqtt_started = true;
 			}
 		}

@@ -513,7 +513,7 @@
  * The formula expects settings to be either '0' or '1'.
  */
 #if !defined MEMP_NUM_SYS_TIMEOUT || defined __DOXYGEN__
-#define MEMP_NUM_SYS_TIMEOUT            LWIP_NUM_SYS_TIMEOUT_INTERNAL
+#define MEMP_NUM_SYS_TIMEOUT            16
 #endif
 
 /**
@@ -1092,7 +1092,7 @@
  * transport.
  */
 #if !defined LWIP_DNS || defined __DOXYGEN__
-#define LWIP_DNS                        0
+#define LWIP_DNS                        1
 #endif
 
 /** DNS maximum number of entries to maintain locally. */
